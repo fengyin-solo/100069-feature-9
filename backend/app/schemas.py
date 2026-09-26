@@ -13,6 +13,7 @@ class PageResult(BaseModel, Generic[T]):
     total: int
     page: int = 1
     size: int = 20
+    hint: str | None = None  # 条件互相打架或一条都没查到时的可读说明
 
 
 class ActionResult(BaseModel):
