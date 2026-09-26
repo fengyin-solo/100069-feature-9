@@ -6,7 +6,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Query
 
 from app.schemas import ActionResult, EntryPayload, PageResult
-from app.services.project import ProjectService
+from app.services.project import SORTABLE_FIELDS, SORT_ORDERS, ProjectService
 
 router = APIRouter(prefix="/api/project", tags=["检测项目"])
 
@@ -15,18 +15,51 @@ service = ProjectService()
 LIST_FIELDS = ["项目编码", "项目名称", "检测方法", "方法标准号", "检出限", "计量单位", "收费单价", "项目状态"]
 STATUSES = ["草稿", "已启用", "待修订", "已停用"]
 
+FILTER_LABELS = {"code": "项目编码", "standard": "方法标准号", "unit": "计量单位"}
+
+
+def _single_value(param: str, values: list[str]) -> str | None:
+    """同一检索条件只接受一个值；传了多个互斥值时说明原因，而不是随便挑一个。"""
+    cleaned = [value.strip() for value in values if value and value.strip()]
+    if len(cleaned) > 1:
+        label = FILTER_LABELS[param]
+        raise HTTPException(
+            status_code=400,
+            detail=f"检索条件互相冲突：{label}同时给了「{'、'.join(cleaned)}」，请只保留一个再查询",
+        )
+    return cleaned[0] if cleaned else None
+
 
 @router.get("", response_model=PageResult[dict])
 def list_entries(
     keyword: str | None = Query(default=None, description="按项目编码检索"),
     status: str | None = Query(default=None, description="草稿、已启用、待修订、已停用"),
+    code: list[str] = Query(default=[], description="按项目编码组合检索"),
+    standard: list[str] = Query(default=[], description="按方法标准号组合检索"),
+    unit: list[str] = Query(default=[], description="按计量单位组合检索"),
+    sort: str | None = Query(default=None, description="排序字段，目前支持收费单价"),
+    order: str = Query(default="asc", description="排序方向：asc 升序、desc 降序"),
     page: int = 1,
     size: int = 20,
 ) -> PageResult[dict]:
-    """按项目编码与状态过滤检测项目列表；没有数据时返回空页，不报错。"""
+    """按项目编码、方法标准号、计量单位组合过滤，并可按收费单价排序；条件冲突或没有命中时返回可读说明，绝不静默返回全量。"""
     if size > 200:
         raise HTTPException(status_code=400, detail="每页最多 200 条，请缩小分页范围")
-    items, total = service.list_entries(keyword=keyword, status=status, page=page, size=size)
+    if sort is not None and sort not in SORTABLE_FIELDS:
+        raise HTTPException(status_code=400, detail=f"暂不支持按「{sort}」排序，目前仅支持收费单价")
+    if order not in SORT_ORDERS:
+        raise HTTPException(status_code=400, detail=f"排序方向「{order}」无法识别，只支持 asc（升序）或 desc（降序）")
+    items, total = service.list_entries(
+        keyword=keyword,
+        status=status,
+        code=_single_value("code", code),
+        standard=_single_value("standard", standard),
+        unit=_single_value("unit", unit),
+        sort=sort,
+        order=order,
+        page=page,
+        size=size,
+    )
     return PageResult(items=items, total=total, page=page, size=size)
 
 

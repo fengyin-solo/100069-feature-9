@@ -11,6 +11,21 @@ STATUS_ORDER = ["草稿", "已启用", "待修订", "已停用"]
 ACTION_RULES = {"启用项目": "已启用", "提交修订": "待修订", "停用项目": "已停用"}
 NEGATIVE_ACTIONS = ["停用项目"]
 
+# 组合检索条件：接口参数名 -> 记录字段名，多个条件之间按“且”叠加
+FILTER_FIELDS = {"code": "项目编码", "standard": "方法标准号", "unit": "计量单位"}
+# 允许排序的字段：当前只放开收费单价，避免任意字段排序把口径打乱
+SORTABLE_FIELDS = {"收费单价": "收费单价"}
+SORT_ORDERS = ("asc", "desc")
+
+
+def _price_key(row: dict[str, Any]) -> tuple[int, float, str]:
+    """收费单价排序键：能转成数字的按数值排，转不了的占位值统一沉底。"""
+    raw = str(row.get("收费单价") or "").strip()
+    try:
+        return (0, float(raw), raw)
+    except ValueError:
+        return (1, 0.0, raw)
+
 
 class ProjectService:
     def list_entries(
@@ -18,6 +33,11 @@ class ProjectService:
         *,
         keyword: str | None = None,
         status: str | None = None,
+        code: str | None = None,
+        standard: str | None = None,
+        unit: str | None = None,
+        sort: str | None = None,
+        order: str = "asc",
         page: int = 1,
         size: int = 20,
     ) -> tuple[list[dict[str, Any]], int]:
@@ -26,6 +46,16 @@ class ProjectService:
             rows = [row for row in rows if keyword in str(row.get("项目编码", ""))]
         if status:
             rows = [row for row in rows if row.get("status") == status]
+        values = {"code": code, "standard": standard, "unit": unit}
+        for param, field in FILTER_FIELDS.items():
+            value = values[param]
+            if value:
+                rows = [row for row in rows if value in str(row.get(field, ""))]
+        if sort in SORTABLE_FIELDS:
+            numeric = [row for row in rows if _price_key(row)[0] == 0]
+            rest = [row for row in rows if _price_key(row)[0] != 0]
+            numeric.sort(key=_price_key, reverse=order == "desc")
+            rows = numeric + rest
         total = len(rows)
         start = max(page - 1, 0) * size
         return rows[start:start + size], total
